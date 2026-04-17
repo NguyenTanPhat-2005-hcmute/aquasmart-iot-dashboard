@@ -527,32 +527,46 @@ input:checked + .slider:before { transform: translateX(26px); }
     }
 }
 
-/* AI Chat Styles */
-.message { display: flex; max-width: 85%; }
-.ai-msg { align-self: flex-start; }
-.user-msg { align-self: flex-end; }
-
-.msg-bubble { 
-    padding: 14px 20px; 
-    border-radius: 20px;
-    font-size: 0.95rem;
-    line-height: 1.5;
-    word-wrap: break-word;
-}
-
-.ai-msg .msg-bubble {
+/* Advisor Dashboard Styles */
+.advisor-card {
     background: var(--card-bg);
     border: 1px solid var(--card-border);
-    border-bottom-left-radius: 5px;
-    color: var(--text-main);
+    border-radius: 15px;
+    padding: 1.5rem;
+    display: flex;
+    gap: 15px;
+    align-items: flex-start;
     box-shadow: 0 4px 15px rgba(0,0,0,0.02);
+    transition: 0.3s;
 }
+.advisor-card:hover {
+    transform: translateX(5px);
+    box-shadow: var(--shadow-hover);
+    border-color: var(--primary-color);
+}
+.advisor-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 12px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+}
+.advisor-icon.progress-icon { background: rgba(14, 165, 233, 0.1); color: #0ea5e9; }
+.advisor-icon.temp-icon { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+.advisor-icon.tip-icon { background: rgba(16, 185, 129, 0.1); color: #10b981; }
 
-.user-msg .msg-bubble {
-    background: var(--primary-gradient);
-    color: #fff;
-    border-bottom-right-radius: 5px;
-    box-shadow: 0 4px 15px rgba(0, 136, 255, 0.2);
+.advisor-content h4 {
+    margin-bottom: 8px;
+    font-size: 1.1rem;
+    color: var(--text-main);
+}
+.advisor-content p {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+    line-height: 1.5;
 }
 
 /* Date Selector Slider */

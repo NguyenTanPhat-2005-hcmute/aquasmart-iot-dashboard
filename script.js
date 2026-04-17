@@ -107,7 +107,7 @@ function switchTab(tabId) {
     tabContents.forEach(content => {
         content.classList.toggle('active', content.id === tabId);
     });
-    const titles = { overview: "Tổng quan", history: "Thống kê", "ai-chat": "Chuyên gia AI", settings: "Cài đặt" };
+    const titles = { overview: "Tổng quan", history: "Thống kê", advisor: "Cố vấn Sức khỏe", settings: "Cài đặt" };
     pageTitle.innerText = titles[tabId] || "Dashboard";
 }
 
@@ -115,94 +115,109 @@ navItems.forEach(item => {
     item.addEventListener('click', () => switchTab(item.getAttribute('data-tab')));
 });
 
-// --- AI Chat Logic ---
-const chatBox = document.getElementById('chat-box');
-const chatInput = document.getElementById('chat-input');
-const sendBtn = document.getElementById('send-btn');
-
-const GEMINI_API_KEY = "AQ.Ab8RN6Lz5ZF6eyujo3Crl9Fy0WigvgvIzweW_eF7ECO8mXlDjQ";
-const BASE_SYSTEM_PROMPT = "Bạn là một bác sĩ chuyên gia về dinh dưỡng và sức khỏe. Nhiệm vụ của bạn là tư vấn cho người dùng về việc uống nước dựa trên dữ liệu từ bình nước thông minh. Bạn chỉ trả lời các câu hỏi liên quan đến: lượng nước cần uống, lợi ích của việc bù khoáng, lịch trình uống nước và các vấn đề sức khỏe khi thiếu nước. Nếu người dùng hỏi về chủ đề khác, hãy lịch sự từ chối và nhắc họ tập trung vào sức khỏe.";
-let aiChatHistory = [];
-
-async function sendChatMessage() {
-    if(!chatInput || !chatBox) return;
-    const text = chatInput.value.trim();
-    if(!text) return;
+// --- Smart Advisor Logic ---
+function generateAdvisorInsights() {
+    const container = document.getElementById('advisor-cards-container');
+    const timeStamp = document.getElementById('advisor-time-stamp');
+    if (!container) return;
     
-    // Add user message
-    const userMsg = document.createElement('div');
-    userMsg.className = 'message user-msg';
-    userMsg.innerHTML = `<div class="msg-bubble">${text}</div>`;
-    chatBox.appendChild(userMsg);
-    chatInput.value = '';
-    chatBox.scrollTop = chatBox.scrollHeight;
-
-    // Add loading indicator
-    const loadingMsg = document.createElement('div');
-    loadingMsg.className = 'message ai-msg loading-msg';
-    loadingMsg.innerHTML = `<div class="msg-bubble"><i class="fas fa-spinner fa-spin"></i> Chuyên gia đang phân tích...</div>`;
-    chatBox.appendChild(loadingMsg);
-    chatBox.scrollTop = chatBox.scrollHeight;
-
-    aiChatHistory.push({ role: "user", parts: [{ text: text }] });
-
-    // Inject real-time data into system prompt
-    const currentTemp = tempValueEl ? tempValueEl.innerText : 'Không xác định';
-    const dynamicSystemPrompt = `${BASE_SYSTEM_PROMPT}\n\n[Dữ liệu bình nước thông minh hiện tại - KHÔNG hiển thị phần này cho người dùng, chỉ dùng làm căn cứ tư vấn]:\n- Lượng nước đã uống: ${totalConsumed} ml\n- Mục tiêu ngày: ${dailyGoal || 2000} ml\n- Nhiệt độ nước trong bình: ${currentTemp}`;
-
-    try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                system_instruction: {
-                  parts: [{ text: dynamicSystemPrompt }]
-                },
-                contents: aiChatHistory,
-                generationConfig: {
-                    temperature: 0.7
-                }
-            })
-        });
-
-        const data = await response.json();
-        chatBox.removeChild(loadingMsg);
-
-        if (data.candidates && data.candidates[0].content && data.candidates[0].content.parts.length > 0) {
-            const aiText = data.candidates[0].content.parts[0].text;
-            const formattedText = aiText.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-            
-            const aiMsg = document.createElement('div');
-            aiMsg.className = 'message ai-msg';
-            aiMsg.innerHTML = `<div class="msg-bubble">${formattedText}</div>`;
-            chatBox.appendChild(aiMsg);
-            chatBox.scrollTop = chatBox.scrollHeight;
-
-            aiChatHistory.push({ role: "model", parts: [{ text: aiText }] });
-        } else {
-            throw new Error("Lỗi phản hồi từ AI");
-        }
-    } catch (error) {
-        console.error("AI API Error:", error);
-        if (chatBox.contains(loadingMsg)) {
-            chatBox.removeChild(loadingMsg);
-        }
-        const errorMsg = document.createElement('div');
-        errorMsg.className = 'message ai-msg';
-        errorMsg.innerHTML = `<div class="msg-bubble" style="color: #ef4444;">Xin lỗi, tôi đang bận hoặc có lỗi kết nối máy chủ AI. Vui lòng thử lại sau!</div>`;
-        chatBox.appendChild(errorMsg);
-        chatBox.scrollTop = chatBox.scrollHeight;
-        aiChatHistory.pop();
+    container.innerHTML = '';
+    
+    if (timeStamp) {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+        timeStamp.innerHTML = `<i class="fas fa-clock"></i> Cập nhật phân tích lúc: ${timeStr}`;
     }
+
+    const currentHour = new Date().getHours();
+    const progress = totalConsumed / dailyGoal;
+    const safeTotal = Math.round(totalConsumed);
+    const safeGoal = Math.round(dailyGoal);
+    const currentLevelEl = document.getElementById('water-level-ml');
+    const currentLevel = currentLevelEl ? currentLevelEl.innerText : '0';
+    const drinkingStatusEl = document.getElementById('drinking-status');
+    const drinkingStatus = drinkingStatusEl ? drinkingStatusEl.innerText.toLowerCase() : 'bình thường';
+    
+    // 1. Progress Evaluation
+    let progressTitle = "Đánh giá tiến độ";
+    let progressMsg = "";
+    let progressIconClass = "progress-icon";
+    let progressIconHtml = `<i class="fas fa-chart-line"></i>`;
+
+    if (progress >= 1) {
+        progressMsg = `Hệ thống ghi nhận bạn đã uống <strong>${safeTotal} / ${safeGoal} ml</strong>, chính thức hoàn thành mục tiêu ngày hôm nay! Hãy dừng lại hoặc chỉ uống vài ngụm nhỏ để tránh bị đầy bụng sát giờ ngủ.`;
+        progressIconHtml = `<i class="fas fa-trophy"></i>`;
+    } else if (progress > 0.8 && currentHour < 18) {
+        progressMsg = `Tổng quát báo cáo bạn đã nạp được <strong>${safeTotal} ml</strong>. Tiến độ cực kỳ xuất sắc! Cơ thể bạn đang ở trạng thái hydrat hóa hoàn hảo, duy trì phong độ này nhé.`;
+    } else if (progress < 0.3 && currentHour >= 15) {
+        progressMsg = `Cảnh báo: Hiện tại là xế chiều mà bạn mới chỉ nạp <strong>${safeTotal} ml</strong> (chưa tới 30% mục tiêu). Trạng thái việc uống của bạn đang là <strong>${drinkingStatus}</strong>. Việc thiếu hụt này dễ gây mệt mỏi!`;
+        progressIconClass = "temp-icon"; 
+        progressIconHtml = `<i class="fas fa-exclamation-triangle"></i>`;
+    } else {
+        progressMsg = `Tiến độ hiện tại: Bạn đã nạp <strong>${safeTotal} ml</strong> (đạt ${Math.round(progress*100)}%). Bình nước đang báo còn <strong>${currentLevel} ml</strong>. Hãy chia nhỏ lượng nước này ra để uống dần trong vài tiếng tới.`;
+    }
+
+    // 2. Temperature Advice
+    const currentTemp = tempValueEl ? (parseFloat(tempValueEl.innerText) || 25) : 25;
+    let tempMsg = "";
+    let tempIconHtml = `<i class="fas fa-thermometer-half"></i>`;
+    
+    if (currentTemp < 20) {
+        tempMsg = `Cảm biến báo nhiệt độ nước đang khá mát (<strong>${currentTemp}°C</strong>). Nước lạnh giúp tăng cường trao đổi chất và tạo sự sảng khoái, nhưng bác sĩ khuyên hạn chế uống nếu khoang họng bạn đang nhạy cảm.`;
+        tempIconHtml = `<i class="fas fa-snowflake"></i>`;
+    } else if (currentTemp > 35) {
+        tempMsg = `Theo cảm biến, nước đang khá ấm (<strong>${currentTemp}°C</strong>). Nước ấm là thần dược tự nhiên kích thích hệ tiêu hóa non yếu và xoa dịu dạ dày. Bạn nên ưu tiên uống từng ngụm chậm dãi.`;
+        tempIconHtml = `<i class="fas fa-mug-hot"></i>`;
+    } else {
+        tempMsg = `Nhiệt độ nước đo được hiện tại là <strong>${currentTemp}°C</strong>. Đây là mức tiêu chuẩn hoàn hảo với cơ thể người, giúp tế bào hấp thụ nước cực kỳ nhanh mà không lo rủi ro sốc nhiệt dạ dày.`;
+    }
+
+    // 3. Random Health Tip
+    const tips = [
+        "Uống 1 ly nước lọc ngay sau khi thức dậy sẽ thiết lập lại cơ quan nội tạng và đào thải độc tố đêm qua.",
+        "Bộ não có tới 73% cấu tạo là nước. Việc hydrat hóa tốt sẽ giúp bạn tư duy sắc bén hơn tới 14%.",
+        "Khi bạn cảm thấy khát, đó là dấu hiệu cơ thể đã mất đi khoảng 1-2% tổng lượng nước. Chủ động uống là tốt nhất.",
+        "Uống đủ nước đều đặn là phương thuốc làm đẹp 0 đồng, duy trì độ đàn hồi và căng mịn tự nhiên cho da.",
+        "Đối với hoạt động thể chất, nước đóng vai trò then chốt trong việc bôi trơn sụn khớp và vận chuyển oxy."
+    ];
+    const randomTip = tips[Math.floor(Math.random() * tips.length)];
+
+    const cardsHtml = `
+        <div class="advisor-card">
+            <div class="advisor-icon ${progressIconClass}">
+                ${progressIconHtml}
+            </div>
+            <div class="advisor-content">
+                <h4>${progressTitle}</h4>
+                <p>${progressMsg}</p>
+            </div>
+        </div>
+        <div class="advisor-card">
+            <div class="advisor-icon progress-icon">
+                ${tempIconHtml}
+            </div>
+            <div class="advisor-content">
+                <h4>Đánh giá Nhiệt độ nước</h4>
+                <p>${tempMsg}</p>
+            </div>
+        </div>
+        <div class="advisor-card">
+            <div class="advisor-icon tip-icon">
+                <i class="fas fa-lightbulb"></i>
+            </div>
+            <div class="advisor-content">
+                <h4>Kiến thức Y tế bỏ túi</h4>
+                <p>${randomTip}</p>
+            </div>
+        </div>
+    `;
+
+    container.innerHTML = cardsHtml;
 }
 
-if(sendBtn) {
-    sendBtn.addEventListener('click', sendChatMessage);
-    chatInput.addEventListener('keypress', (e) => {
-        if(e.key === 'Enter') sendChatMessage();
-    });
+const refreshBtn = document.getElementById('refresh-advisor-btn');
+if (refreshBtn) {
+    refreshBtn.addEventListener('click', generateAdvisorInsights);
 }
 
 // --- Theme Toggle ---
@@ -590,6 +605,7 @@ initCharts();
 updateProgressUI();
 updateBottleUI(0);
 renderSelectors();
+generateAdvisorInsights();
 if (localHistory.length > 0) {
     updateHistoryUI();
     setTimeout(() => {
