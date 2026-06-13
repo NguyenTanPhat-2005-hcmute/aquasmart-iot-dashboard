@@ -1,6 +1,6 @@
 // Import Firebase SDKs
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
-import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+import { getDatabase, ref, onValue, set, get, child, remove } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
 
 // --- Authentication Guard ---
 if (localStorage.getItem('isLoggedIn') !== 'true') {
@@ -8,7 +8,17 @@ if (localStorage.getItem('isLoggedIn') !== 'true') {
 }
 
 const userAccStr = localStorage.getItem('user_account');
-let currentUser = userAccStr ? JSON.parse(userAccStr) : { name: "Thành viên mới", email: "user@aqua.com", password: "" };
+let currentUser = userAccStr ? JSON.parse(userAccStr) : { name: "Thành viên mới", email: "user@aqua.com", password: "", role: "user" };
+
+const ADMIN_EMAIL = "23161297@student.hcmute.edu.vn";
+
+function encodeEmail(email) {
+    return email.toLowerCase().replaceAll(".", "_").replaceAll("@", "_");
+}
+
+function isCurrentUserAdmin() {
+    return currentUser.email === ADMIN_EMAIL || currentUser.role === "admin";
+}
 
 window.addEventListener('DOMContentLoaded', () => {
     // Populate header profile
@@ -41,6 +51,13 @@ window.addEventListener('DOMContentLoaded', () => {
                     accPassInput.value = '';
                 }
                 localStorage.setItem('user_account', JSON.stringify(currentUser));
+
+                // Nếu là user đã duyệt, cập nhật lại thông tin lên Firebase.
+                if (!isCurrentUserAdmin()) {
+                    const userKey = encodeEmail(currentUser.email);
+                    set(ref(db, `approved_users/${userKey}`), currentUser).catch(console.error);
+                }
+
                 if (headerName) headerName.innerText = currentUser.name;
                 alert('Cập nhật tài khoản thành công!');
             }
@@ -53,9 +70,12 @@ window.addEventListener('DOMContentLoaded', () => {
         logoutLink.addEventListener('click', (e) => {
             e.preventDefault();
             localStorage.removeItem('isLoggedIn');
+            localStorage.removeItem('user_account');
             window.location.href = 'auth.html';
         });
     }
+
+    initAdminPanel();
 });
 
 // Firebase Configuration
@@ -71,6 +91,111 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getDatabase(app);
+
+// --- Session Verification ---
+async function verifyCurrentSession() {
+    if (isCurrentUserAdmin()) return;
+
+    try {
+        const userKey = encodeEmail(currentUser.email || "");
+        const approvedSnap = await get(child(ref(db), `approved_users/${userKey}`));
+
+        if (!approvedSnap.exists()) {
+            localStorage.removeItem('isLoggedIn');
+            localStorage.removeItem('user_account');
+            alert('Tài khoản chưa được quản trị viên duyệt hoặc đã bị xóa.');
+            window.location.href = 'auth.html';
+            return;
+        }
+
+        const approvedUser = approvedSnap.val();
+        currentUser = approvedUser;
+        localStorage.setItem('user_account', JSON.stringify(approvedUser));
+    } catch (error) {
+        console.error(error);
+    }
+}
+
+verifyCurrentSession();
+
+// --- Admin Account Management ---
+function initAdminPanel() {
+    const isAdmin = isCurrentUserAdmin();
+    const adminItems = document.querySelectorAll('.admin-only');
+
+    adminItems.forEach(item => {
+        item.style.display = isAdmin ? '' : 'none';
+    });
+
+    if (!isAdmin) return;
+
+    const pendingUsersRef = ref(db, 'pending_users');
+
+    onValue(pendingUsersRef, (snapshot) => {
+        const tbody = document.getElementById('pending-users-body');
+        if (!tbody) return;
+
+        tbody.innerHTML = '';
+
+        if (!snapshot.exists()) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5">Hiện không có tài khoản nào đang chờ duyệt.</td>
+                </tr>
+            `;
+            return;
+        }
+
+        snapshot.forEach((childSnap) => {
+            const key = childSnap.key;
+            const user = childSnap.val();
+            const createdAt = user.createdAt ? new Date(user.createdAt).toLocaleString('vi-VN') : 'Không rõ';
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${user.name || ''}</td>
+                <td>${user.email || ''}</td>
+                <td>${createdAt}</td>
+                <td><span style="color: #f59e0b; font-weight: 600;">Chờ duyệt</span></td>
+                <td>
+                    <button class="btn-approve" data-key="${key}" style="padding: 8px 12px; border: none; border-radius: 8px; background: #10b981; color: white; cursor: pointer;">
+                        Duyệt
+                    </button>
+                    <button class="btn-reject" data-key="${key}" style="padding: 8px 12px; border: none; border-radius: 8px; background: #ef4444; color: white; cursor: pointer; margin-left: 6px;">
+                        Từ chối
+                    </button>
+                </td>
+            `;
+
+            tbody.appendChild(tr);
+
+            tr.querySelector('.btn-approve').addEventListener('click', async () => {
+                const approvedUser = {
+                    ...user,
+                    role: "user",
+                    status: "approved",
+                    approvedAt: new Date().toISOString(),
+                    approvedBy: currentUser.email
+                };
+
+                await set(ref(db, `approved_users/${key}`), approvedUser);
+                await remove(ref(db, `pending_users/${key}`));
+
+                alert(`Đã duyệt tài khoản: ${user.email}`);
+            });
+
+            tr.querySelector('.btn-reject').addEventListener('click', async () => {
+                const confirmReject = confirm(`Bạn có chắc muốn từ chối tài khoản ${user.email}?`);
+
+                if (confirmReject) {
+                    await remove(ref(db, `pending_users/${key}`));
+                    alert(`Đã từ chối tài khoản: ${user.email}`);
+                }
+            });
+        });
+    });
+}
+
 
 // --- State ---
 let dailyGoal = 2000;
@@ -101,13 +226,24 @@ const smartTipEl = document.getElementById('smart-tip');
 
 // --- Navigation ---
 function switchTab(tabId) {
+    if (tabId === 'admin-users' && !isCurrentUserAdmin()) {
+        alert('Bạn không có quyền truy cập trang quản lý tài khoản.');
+        tabId = 'overview';
+    }
+
     navItems.forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-tab') === tabId);
     });
     tabContents.forEach(content => {
         content.classList.toggle('active', content.id === tabId);
     });
-    const titles = { overview: "Tổng quan", history: "Thống kê", advisor: "Cố vấn Sức khỏe", settings: "Cài đặt" };
+    const titles = {
+        overview: "Tổng quan",
+        history: "Thống kê",
+        advisor: "Cố vấn Sức khỏe",
+        settings: "Cài đặt",
+        "admin-users": "Quản lý tài khoản"
+    };
     pageTitle.innerText = titles[tabId] || "Dashboard";
 }
 
