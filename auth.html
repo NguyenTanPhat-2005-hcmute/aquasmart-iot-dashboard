@@ -144,7 +144,40 @@
         </div>
     </div>
 
-    <script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
+        import { getDatabase, ref, set, get, child } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+
+        // ===============================
+        // FIREBASE CONFIG
+        // ===============================
+        const firebaseConfig = {
+            apiKey: "AIzaSyDFzYwBWcOEYLmUX_3UaLeS7P-kgCVGZlg",
+            authDomain: "smart-water-bottle-85d4e.firebaseapp.com",
+            databaseURL: "https://smart-water-bottle-85d4e-default-rtdb.asia-southeast1.firebasedatabase.app",
+            projectId: "smart-water-bottle-85d4e",
+            storageBucket: "smart-water-bottle-85d4e.firebasestorage.app",
+            messagingSenderId: "564913647295",
+            appId: "1:564913647295:web:e3726087e93545a2a8e00a"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+
+        // ===============================
+        // ADMIN ACCOUNT
+        // My có thể đổi mật khẩu admin tại đây cho dễ demo.
+        // ===============================
+        const ADMIN_EMAIL = "23161297@student.hcmute.edu.vn";
+        const ADMIN_PASSWORD = "123456";
+
+        function encodeEmail(email) {
+            return email.toLowerCase().replaceAll(".", "_").replaceAll("@", "_");
+        }
+
+        // ===============================
+        // TAB LOGIN / REGISTER
+        // ===============================
         const tabLogin = document.getElementById('tab-login');
         const tabRegister = document.getElementById('tab-register');
         const loginForm = document.getElementById('login-form');
@@ -164,41 +197,125 @@
             loginForm.classList.remove('active');
         });
 
-        // Authentication Logic
+        // ===============================
+        // AUTHENTICATION LOGIC
+        // ===============================
         const loginBtn = document.getElementById('login-btn');
         const registerBtn = document.getElementById('register-btn');
 
-        loginBtn.addEventListener('click', () => {
-            const email = document.getElementById('login-email').value;
-            const pass = document.getElementById('login-pass').value;
-            
-            const savedAcc = localStorage.getItem('user_account');
-            if (savedAcc) {
-                const user = JSON.parse(savedAcc);
-                if (user.email === email && user.password === pass) {
-                    localStorage.setItem('isLoggedIn', 'true');
-                    window.location.href = 'index.html';
-                } else {
-                    alert('Này! Email hoặc mật khẩu không chính xác!');
+        registerBtn.addEventListener('click', async () => {
+            const name = document.getElementById('reg-name').value.trim();
+            const email = document.getElementById('reg-email').value.trim().toLowerCase();
+            const pass = document.getElementById('reg-pass').value.trim();
+
+            if (!name || !email || !pass) {
+                alert('Vui lòng điền đủ thông tin đăng ký!');
+                return;
+            }
+
+            if (email === ADMIN_EMAIL) {
+                alert('Email quản trị viên không được đăng ký ở form người dùng. Vui lòng đăng nhập bằng tài khoản admin.');
+                return;
+            }
+
+            try {
+                const emailKey = encodeEmail(email);
+                const rootRef = ref(db);
+
+                const approvedSnap = await get(child(rootRef, `approved_users/${emailKey}`));
+                if (approvedSnap.exists()) {
+                    alert('Tài khoản này đã được duyệt rồi. Vui lòng đăng nhập.');
+                    tabLogin.click();
+                    return;
                 }
-            } else {
-                alert('Tài khoản chưa tồn tại, vui lòng đăng ký trước.');
+
+                const pendingSnap = await get(child(rootRef, `pending_users/${emailKey}`));
+                if (pendingSnap.exists()) {
+                    alert('Tài khoản này đang chờ quản trị viên duyệt.');
+                    tabLogin.click();
+                    return;
+                }
+
+                const newUser = {
+                    name: name,
+                    email: email,
+                    password: pass,
+                    role: "user",
+                    status: "pending",
+                    createdAt: new Date().toISOString()
+                };
+
+                await set(ref(db, `pending_users/${emailKey}`), newUser);
+
+                alert('Đăng ký thành công! Tài khoản đang chờ quản trị viên duyệt. Khi được duyệt bạn mới có thể đăng nhập.');
+                document.getElementById('reg-name').value = '';
+                document.getElementById('reg-email').value = '';
+                document.getElementById('reg-pass').value = '';
+                tabLogin.click();
+            } catch (error) {
+                console.error(error);
+                alert('Có lỗi khi gửi yêu cầu đăng ký. Vui lòng kiểm tra Firebase hoặc kết nối mạng.');
             }
         });
 
-        registerBtn.addEventListener('click', () => {
-            const name = document.getElementById('reg-name').value;
-            const email = document.getElementById('reg-email').value;
-            const pass = document.getElementById('reg-pass').value;
-            
-            if (name && email && pass) {
-                const user = { name, email, password: pass };
+        loginBtn.addEventListener('click', async () => {
+            const email = document.getElementById('login-email').value.trim().toLowerCase();
+            const pass = document.getElementById('login-pass').value.trim();
+
+            if (!email || !pass) {
+                alert('Vui lòng nhập email và mật khẩu.');
+                return;
+            }
+
+            try {
+                // Admin đăng nhập trực tiếp để duyệt tài khoản.
+                if (email === ADMIN_EMAIL) {
+                    if (pass !== ADMIN_PASSWORD) {
+                        alert('Mật khẩu admin không đúng!');
+                        return;
+                    }
+
+                    const adminUser = {
+                        name: "Đinh Thị Kiều My",
+                        email: ADMIN_EMAIL,
+                        role: "admin",
+                        status: "approved"
+                    };
+
+                    localStorage.setItem('user_account', JSON.stringify(adminUser));
+                    localStorage.setItem('isLoggedIn', 'true');
+                    window.location.href = 'index.html';
+                    return;
+                }
+
+                const emailKey = encodeEmail(email);
+                const rootRef = ref(db);
+                const approvedSnap = await get(child(rootRef, `approved_users/${emailKey}`));
+
+                if (!approvedSnap.exists()) {
+                    const pendingSnap = await get(child(rootRef, `pending_users/${emailKey}`));
+
+                    if (pendingSnap.exists()) {
+                        alert('Tài khoản của bạn đang chờ quản trị viên duyệt.');
+                    } else {
+                        alert('Tài khoản chưa tồn tại. Vui lòng đăng ký trước.');
+                    }
+                    return;
+                }
+
+                const user = approvedSnap.val();
+
+                if (user.password !== pass) {
+                    alert('Email hoặc mật khẩu không chính xác!');
+                    return;
+                }
+
                 localStorage.setItem('user_account', JSON.stringify(user));
                 localStorage.setItem('isLoggedIn', 'true');
-                alert('Đăng ký tài khoản thành công!');
                 window.location.href = 'index.html';
-            } else {
-                alert('Vui lòng điền đủ thông tin đăng ký!');
+            } catch (error) {
+                console.error(error);
+                alert('Có lỗi khi đăng nhập. Vui lòng kiểm tra Firebase hoặc kết nối mạng.');
             }
         });
     </script>
