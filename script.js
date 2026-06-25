@@ -211,6 +211,7 @@ const navItems = document.querySelectorAll('.nav-item, .mobile-nav-item');
 const tabContents = document.querySelectorAll('.tab-content');
 const pageTitle = document.getElementById('page-title');
 const lastSyncEl = document.getElementById('last-sync');
+const firebaseDelayEl = document.getElementById('firebase-delay');
 
 const tempValueEl = document.getElementById('temp-value');
 const tempCard = document.getElementById('temp-card');
@@ -469,8 +470,12 @@ function initCharts() {
 
 // --- Firebase ---
 const bottleRef = ref(db, 'smart_bottle/current_status');
+
 onValue(bottleRef, (snapshot) => {
+    const tWebStart = performance.now();
+
     const data = snapshot.val();
+
     if (data) {
         updateTempUI(data.water_temp || 0);
         updateBottleUI(data.water_level || 0);
@@ -484,23 +489,42 @@ onValue(bottleRef, (snapshot) => {
         totalConsumed = data.total_consumed || 0;
         updateProgressUI();
 
-        // Track local history for real data recording
+        // Ghi lịch sử uống nước cục bộ
         if (lastReportedConsumed !== null && totalConsumed > lastReportedConsumed + 5) {
             localHistory.unshift({
                 time: Date.now(),
                 amount: totalConsumed - lastReportedConsumed,
                 status: 'Hoàn thành'
             });
-            if (localHistory.length > 50) localHistory.pop();
+
+            if (localHistory.length > 50) {
+                localHistory.pop();
+            }
+
             localStorage.setItem('water_history', JSON.stringify(localHistory));
             renderSelectors();
             updateHistoryUI();
             updateDailyChartFromHistory();
             updateWeeklyChartFromHistory();
         }
+
         lastReportedConsumed = totalConsumed;
 
-        if (lastSyncEl) lastSyncEl.innerText = `Cập nhật: ${new Date().toLocaleTimeString()}`;
+        const tWebEnd = performance.now();
+        const firebaseToWebDelay = tWebEnd - tWebStart;
+
+        if (lastSyncEl) {
+            lastSyncEl.innerText = `Cập nhật: ${new Date().toLocaleTimeString()}`;
+        }
+
+        if (firebaseDelayEl) {
+            firebaseDelayEl.innerText = `Độ trễ Firebase → Web: ${firebaseToWebDelay.toFixed(2)} ms`;
+        }
+
+        console.log("===== ĐO ĐỘ TRỄ FIREBASE → WEB =====");
+        console.log("tWebStart =", tWebStart.toFixed(2), "ms");
+        console.log("tWebEnd =", tWebEnd.toFixed(2), "ms");
+        console.log("Tweb =", firebaseToWebDelay.toFixed(2), "ms");
     } else {
         simulateUpdate();
     }
