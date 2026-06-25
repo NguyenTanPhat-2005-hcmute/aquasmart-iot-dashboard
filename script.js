@@ -21,13 +21,12 @@ function isCurrentUserAdmin() {
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-    // Populate header profile
     const headerName = document.querySelector('.user-info strong');
     const headerEmail = document.querySelector('.user-info span');
+
     if (headerName) headerName.innerText = currentUser.name;
     if (headerEmail) headerEmail.innerText = currentUser.email;
 
-    // Populate Account form
     const accNameInput = document.getElementById('acc-name');
     const accEmailInput = document.getElementById('acc-email');
     const accPassInput = document.getElementById('acc-pass');
@@ -41,36 +40,41 @@ window.addEventListener('DOMContentLoaded', () => {
     if (accForm) {
         accForm.addEventListener('submit', (e) => {
             e.preventDefault();
+
             const newName = accNameInput.value.trim();
             const newPass = accPassInput.value.trim();
             
             if (newName) {
                 currentUser.name = newName;
+
                 if (newPass) {
                     currentUser.password = newPass;
                     accPassInput.value = '';
                 }
+
                 localStorage.setItem('user_account', JSON.stringify(currentUser));
 
-                // Nếu là user đã duyệt, cập nhật lại thông tin lên Firebase.
                 if (!isCurrentUserAdmin()) {
                     const userKey = encodeEmail(currentUser.email);
                     set(ref(db, `approved_users/${userKey}`), currentUser).catch(console.error);
                 }
 
                 if (headerName) headerName.innerText = currentUser.name;
+
                 alert('Cập nhật tài khoản thành công!');
             }
         });
     }
 
-    // Handle Logout
     const logoutLink = document.querySelector('.logout-link');
+
     if (logoutLink) {
         logoutLink.addEventListener('click', (e) => {
             e.preventDefault();
+
             localStorage.removeItem('isLoggedIn');
             localStorage.removeItem('user_account');
+
             window.location.href = 'auth.html';
         });
     }
@@ -103,13 +107,16 @@ async function verifyCurrentSession() {
         if (!approvedSnap.exists()) {
             localStorage.removeItem('isLoggedIn');
             localStorage.removeItem('user_account');
+
             alert('Tài khoản chưa được quản trị viên duyệt hoặc đã bị xóa.');
             window.location.href = 'auth.html';
+
             return;
         }
 
         const approvedUser = approvedSnap.val();
         currentUser = approvedUser;
+
         localStorage.setItem('user_account', JSON.stringify(approvedUser));
     } catch (error) {
         console.error(error);
@@ -133,6 +140,7 @@ function initAdminPanel() {
 
     onValue(pendingUsersRef, (snapshot) => {
         const tbody = document.getElementById('pending-users-body');
+
         if (!tbody) return;
 
         tbody.innerHTML = '';
@@ -143,6 +151,7 @@ function initAdminPanel() {
                     <td colspan="5">Hiện không có tài khoản nào đang chờ duyệt.</td>
                 </tr>
             `;
+
             return;
         }
 
@@ -152,6 +161,7 @@ function initAdminPanel() {
             const createdAt = user.createdAt ? new Date(user.createdAt).toLocaleString('vi-VN') : 'Không rõ';
 
             const tr = document.createElement('tr');
+
             tr.innerHTML = `
                 <td>${user.name || ''}</td>
                 <td>${user.email || ''}</td>
@@ -196,15 +206,18 @@ function initAdminPanel() {
     });
 }
 
-
 // --- State ---
 let dailyGoal = 2000;
 let totalConsumed = 0;
 let dailyChart, weeklyChart;
 let localHistory = JSON.parse(localStorage.getItem('water_history')) || [];
 let lastReportedConsumed = null;
-let selectedDailyDate = new Date().setHours(0,0,0,0);
-let selectedWeeklyDate = new Date().setHours(0,0,0,0);
+let selectedDailyDate = new Date().setHours(0, 0, 0, 0);
+let selectedWeeklyDate = new Date().setHours(0, 0, 0, 0);
+
+// Biến dùng để đo delay Firebase → Web chỉ khi trạng thái uống thay đổi
+let lastDrinkState = null;
+let drinkChangeCount = 0;
 
 // --- DOM Elements ---
 const navItems = document.querySelectorAll('.nav-item, .mobile-nav-item');
@@ -235,9 +248,11 @@ function switchTab(tabId) {
     navItems.forEach(item => {
         item.classList.toggle('active', item.getAttribute('data-tab') === tabId);
     });
+
     tabContents.forEach(content => {
         content.classList.toggle('active', content.id === tabId);
     });
+
     const titles = {
         overview: "Tổng quan",
         history: "Thống kê",
@@ -245,6 +260,7 @@ function switchTab(tabId) {
         settings: "Cài đặt",
         "admin-users": "Quản lý tài khoản"
     };
+
     pageTitle.innerText = titles[tabId] || "Dashboard";
 }
 
@@ -256,6 +272,7 @@ navItems.forEach(item => {
 function generateAdvisorInsights() {
     const container = document.getElementById('advisor-cards-container');
     const timeStamp = document.getElementById('advisor-time-stamp');
+
     if (!container) return;
     
     container.innerHTML = '';
@@ -263,6 +280,7 @@ function generateAdvisorInsights() {
     if (timeStamp) {
         const now = new Date();
         const timeStr = now.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
         timeStamp.innerHTML = `<i class="fas fa-clock"></i> Cập nhật phân tích lúc: ${timeStr}`;
     }
 
@@ -272,10 +290,8 @@ function generateAdvisorInsights() {
     const safeGoal = Math.round(dailyGoal);
     const currentLevelEl = document.getElementById('water-level-ml');
     const currentLevel = currentLevelEl ? currentLevelEl.innerText : '0';
-    const drinkingStatusEl = document.getElementById('drinking-status');
     const drinkingStatus = drinkingStatusEl ? drinkingStatusEl.innerText.toLowerCase() : 'bình thường';
     
-    // 1. Progress Evaluation
     let progressTitle = "Đánh giá tiến độ";
     let progressMsg = "";
     let progressIconClass = "progress-icon";
@@ -287,36 +303,35 @@ function generateAdvisorInsights() {
     } else if (progress > 0.8 && currentHour < 18) {
         progressMsg = `Tổng quát báo cáo bạn đã nạp được <strong>${safeTotal} ml</strong>. Tiến độ cực kỳ xuất sắc! Cơ thể bạn đang ở trạng thái hydrat hóa hoàn hảo, duy trì phong độ này nhé.`;
     } else if (progress < 0.3 && currentHour >= 15) {
-        progressMsg = `Cảnh báo: Hiện tại là xế chiều mà bạn mới chỉ nạp <strong>${safeTotal} ml</strong> (chưa tới 30% mục tiêu). Trạng thái việc uống của bạn đang là <strong>${drinkingStatus}</strong>. Việc thiếu hụt này dễ gây mệt mỏi!`;
-        progressIconClass = "temp-icon"; 
+        progressMsg = `Cảnh báo: Hiện tại là xế chiều mà bạn mới chỉ nạp <strong>${safeTotal} ml</strong> chưa tới 30% mục tiêu. Trạng thái việc uống của bạn đang là <strong>${drinkingStatus}</strong>. Việc thiếu hụt này dễ gây mệt mỏi!`;
+        progressIconClass = "temp-icon";
         progressIconHtml = `<i class="fas fa-exclamation-triangle"></i>`;
     } else {
-        progressMsg = `Tiến độ hiện tại: Bạn đã nạp <strong>${safeTotal} ml</strong> (đạt ${Math.round(progress*100)}%). Bình nước đang báo còn <strong>${currentLevel} ml</strong>. Hãy chia nhỏ lượng nước này ra để uống dần trong vài tiếng tới.`;
+        progressMsg = `Tiến độ hiện tại: Bạn đã nạp <strong>${safeTotal} ml</strong> đạt ${Math.round(progress * 100)}%. Bình nước đang báo còn <strong>${currentLevel} ml</strong>. Hãy chia nhỏ lượng nước này ra để uống dần trong vài tiếng tới.`;
     }
 
-    // 2. Temperature Advice
     const currentTemp = tempValueEl ? (parseFloat(tempValueEl.innerText) || 25) : 25;
     let tempMsg = "";
     let tempIconHtml = `<i class="fas fa-thermometer-half"></i>`;
     
     if (currentTemp < 20) {
-        tempMsg = `Cảm biến báo nhiệt độ nước đang khá mát (<strong>${currentTemp}°C</strong>). Nước lạnh giúp tăng cường trao đổi chất và tạo sự sảng khoái, nhưng bác sĩ khuyên hạn chế uống nếu khoang họng bạn đang nhạy cảm.`;
+        tempMsg = `Cảm biến báo nhiệt độ nước đang khá mát <strong>${currentTemp}°C</strong>. Nước lạnh giúp tạo sự sảng khoái, nhưng nên hạn chế nếu khoang họng đang nhạy cảm.`;
         tempIconHtml = `<i class="fas fa-snowflake"></i>`;
     } else if (currentTemp > 35) {
-        tempMsg = `Theo cảm biến, nước đang khá ấm (<strong>${currentTemp}°C</strong>). Nước ấm là thần dược tự nhiên kích thích hệ tiêu hóa non yếu và xoa dịu dạ dày. Bạn nên ưu tiên uống từng ngụm chậm dãi.`;
+        tempMsg = `Theo cảm biến, nước đang khá ấm <strong>${currentTemp}°C</strong>. Bạn nên ưu tiên uống từng ngụm chậm.`;
         tempIconHtml = `<i class="fas fa-mug-hot"></i>`;
     } else {
-        tempMsg = `Nhiệt độ nước đo được hiện tại là <strong>${currentTemp}°C</strong>. Đây là mức tiêu chuẩn hoàn hảo với cơ thể người, giúp tế bào hấp thụ nước cực kỳ nhanh mà không lo rủi ro sốc nhiệt dạ dày.`;
+        tempMsg = `Nhiệt độ nước đo được hiện tại là <strong>${currentTemp}°C</strong>. Đây là mức tương đối phù hợp để sử dụng hằng ngày.`;
     }
 
-    // 3. Random Health Tip
     const tips = [
-        "Uống 1 ly nước lọc ngay sau khi thức dậy sẽ thiết lập lại cơ quan nội tạng và đào thải độc tố đêm qua.",
-        "Bộ não có tới 73% cấu tạo là nước. Việc hydrat hóa tốt sẽ giúp bạn tư duy sắc bén hơn tới 14%.",
-        "Khi bạn cảm thấy khát, đó là dấu hiệu cơ thể đã mất đi khoảng 1-2% tổng lượng nước. Chủ động uống là tốt nhất.",
-        "Uống đủ nước đều đặn là phương thuốc làm đẹp 0 đồng, duy trì độ đàn hồi và căng mịn tự nhiên cho da.",
-        "Đối với hoạt động thể chất, nước đóng vai trò then chốt trong việc bôi trơn sụn khớp và vận chuyển oxy."
+        "Uống 1 ly nước lọc ngay sau khi thức dậy giúp cơ thể bù lại lượng nước thiếu hụt qua đêm.",
+        "Não bộ cần đủ nước để duy trì sự tập trung và khả năng xử lý thông tin.",
+        "Khi bạn cảm thấy khát, cơ thể đã bắt đầu thiếu nước. Chủ động uống từng ngụm nhỏ là tốt nhất.",
+        "Uống đủ nước đều đặn giúp duy trì độ ẩm và độ đàn hồi tự nhiên của da.",
+        "Nước đóng vai trò quan trọng trong việc bôi trơn khớp và vận chuyển chất dinh dưỡng."
     ];
+
     const randomTip = tips[Math.floor(Math.random() * tips.length)];
 
     const cardsHtml = `
@@ -329,6 +344,7 @@ function generateAdvisorInsights() {
                 <p>${progressMsg}</p>
             </div>
         </div>
+
         <div class="advisor-card">
             <div class="advisor-icon progress-icon">
                 ${tempIconHtml}
@@ -338,12 +354,13 @@ function generateAdvisorInsights() {
                 <p>${tempMsg}</p>
             </div>
         </div>
+
         <div class="advisor-card">
             <div class="advisor-icon tip-icon">
                 <i class="fas fa-lightbulb"></i>
             </div>
             <div class="advisor-content">
-                <h4>Kiến thức Y tế bỏ túi</h4>
+                <h4>Kiến thức sức khỏe</h4>
                 <p>${randomTip}</p>
             </div>
         </div>
@@ -353,12 +370,14 @@ function generateAdvisorInsights() {
 }
 
 const refreshBtn = document.getElementById('refresh-advisor-btn');
+
 if (refreshBtn) {
     refreshBtn.addEventListener('click', generateAdvisorInsights);
 }
 
 // --- Theme Toggle ---
 const toggleSwitch = document.querySelector('.theme-switch input[type="checkbox"]');
+
 function switchTheme(e) {
     if (e.target.checked) {
         document.documentElement.setAttribute('data-theme', 'dark');
@@ -368,11 +387,15 @@ function switchTheme(e) {
         localStorage.setItem('theme', 'light');
     }
 }
+
 if (toggleSwitch) {
     toggleSwitch.addEventListener('change', switchTheme, false);
+
     const currentTheme = localStorage.getItem('theme');
+
     if (currentTheme) {
         document.documentElement.setAttribute('data-theme', currentTheme);
+
         if (currentTheme === 'dark') {
             toggleSwitch.checked = true;
         }
@@ -382,34 +405,50 @@ if (toggleSwitch) {
 // --- UI Updates ---
 function updateBottleUI(levelMl) {
     if (!bottleFill) return;
-    const maxCapacity = 1000; // max là 1000ml mới full bình
-    const percentage = Math.min((levelMl / maxCapacity) * 100, 100);
 
-    // Bottle internal SVG range: y=20 (top) to y=195 (bottom)
-    const range = 175; // 195 - 20
+    const maxCapacity = 1000;
+    const percentage = Math.min((levelMl / maxCapacity) * 100, 100);
+    const range = 175;
     const fillHeight = (percentage / 100) * range;
     const yPos = 195 - fillHeight;
 
     bottleFill.setAttribute('y', yPos);
     bottleFill.setAttribute('height', fillHeight);
-    waterLevelMlEl.innerText = Math.round(levelMl);
+
+    if (waterLevelMlEl) {
+        waterLevelMlEl.innerText = Math.round(levelMl);
+    }
 }
 
 function updateTempUI(temp) {
     if (!tempValueEl) return;
+
     tempValueEl.innerText = `${temp.toFixed(1)}°C`;
+
+    if (!tempCard) return;
+
     tempCard.classList.remove('temp-cold', 'temp-warm', 'temp-hot');
 
-    if (temp <= 25) tempCard.classList.add('temp-cold');
-    else if (temp <= 40) tempCard.classList.add('temp-warm');
-    else tempCard.classList.add('temp-hot');
+    if (temp <= 25) {
+        tempCard.classList.add('temp-cold');
+    } else if (temp <= 40) {
+        tempCard.classList.add('temp-warm');
+    } else {
+        tempCard.classList.add('temp-hot');
+    }
 }
 
 function updateProgressUI() {
     const goal = dailyGoal || 2000;
     const percentage = Math.min(Math.round((totalConsumed / goal) * 100), 100);
-    if (progressPercentEl) progressPercentEl.innerText = `${percentage}%`;
-    if (intakeTextEl) intakeTextEl.innerText = `${Math.round(totalConsumed)} / ${goal} ml`;
+
+    if (progressPercentEl) {
+        progressPercentEl.innerText = `${percentage}%`;
+    }
+
+    if (intakeTextEl) {
+        intakeTextEl.innerText = `${Math.round(totalConsumed)} / ${goal} ml`;
+    }
 
     if (progressCircle) {
         const angle = (percentage / 100) * 360;
@@ -417,9 +456,13 @@ function updateProgressUI() {
     }
 
     if (smartTipEl) {
-        if (percentage < 30) smartTipEl.innerText = "Hãy uống thêm nước để duy trì năng lượng!";
-        else if (percentage < 100) smartTipEl.innerText = "Sắp đạt mục tiêu rồi, cố lên!";
-        else smartTipEl.innerText = "Tuyệt vời! Bạn đã uống đủ nước hôm nay.";
+        if (percentage < 30) {
+            smartTipEl.innerText = "Hãy uống thêm nước để duy trì năng lượng!";
+        } else if (percentage < 100) {
+            smartTipEl.innerText = "Sắp đạt mục tiêu rồi, cố lên!";
+        } else {
+            smartTipEl.innerText = "Tuyệt vời! Bạn đã uống đủ nước hôm nay.";
+        }
     }
 }
 
@@ -437,59 +480,73 @@ function initCharts() {
         }
     };
 
-    const ctxDaily = document.getElementById('dailyChart').getContext('2d');
-    dailyChart = new Chart(ctxDaily, {
-        type: 'bar',
-        data: {
-            labels: ['6h', '9h', '12h', '15h', '18h', '21h'],
-            datasets: [{
-                data: [0.2, 0.4, 0.3, 0.5, 0.2, 0.1],
-                backgroundColor: '#2196F3',
-                borderRadius: 5
-            }]
-        },
-        options: chartOptions
-    });
+    const dailyCanvas = document.getElementById('dailyChart');
+    const weeklyCanvas = document.getElementById('weeklyChart');
 
-    const ctxWeekly = document.getElementById('weeklyChart').getContext('2d');
-    weeklyChart = new Chart(ctxWeekly, {
-        type: 'line',
-        data: {
-            labels: ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'],
-            datasets: [{
-                data: [1.8, 2.1, 1.9, 2.5, 2.0, 1.5, 2.2],
-                borderColor: '#2196F3',
-                backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                fill: true,
-                tension: 0.4
-            }]
-        },
-        options: chartOptions
-    });
+    if (dailyCanvas) {
+        const ctxDaily = dailyCanvas.getContext('2d');
+
+        dailyChart = new Chart(ctxDaily, {
+            type: 'bar',
+            data: {
+                labels: ['6h', '9h', '12h', '15h', '18h', '21h'],
+                datasets: [{
+                    data: [0.2, 0.4, 0.3, 0.5, 0.2, 0.1],
+                    backgroundColor: '#2196F3',
+                    borderRadius: 5
+                }]
+            },
+            options: chartOptions
+        });
+    }
+
+    if (weeklyCanvas) {
+        const ctxWeekly = weeklyCanvas.getContext('2d');
+
+        weeklyChart = new Chart(ctxWeekly, {
+            type: 'line',
+            data: {
+                labels: ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'],
+                datasets: [{
+                    data: [1.8, 2.1, 1.9, 2.5, 2.0, 1.5, 2.2],
+                    borderColor: '#2196F3',
+                    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: chartOptions
+        });
+    }
 }
 
 // --- Firebase ---
+// Đo delay Firebase → Web chỉ khi trạng thái uống thay đổi
 const bottleRef = ref(db, 'smart_bottle/current_status');
 
 onValue(bottleRef, (snapshot) => {
     const tWebStart = performance.now();
-
     const data = snapshot.val();
 
     if (data) {
         updateTempUI(data.water_temp || 0);
         updateBottleUI(data.water_level || 0);
 
+        const currentDrinkState = data.is_drinking ? true : false;
+        const drinkStateChanged = lastDrinkState !== null && currentDrinkState !== lastDrinkState;
+
         if (drinkingStatusEl) {
-            drinkingStatusEl.innerText = data.is_drinking ? "Đang uống" : "Chưa uống";
-            drinkingStatusEl.style.color = data.is_drinking ? "#10b981" : "var(--text-muted)";
-            drinkingIconEl.style.color = data.is_drinking ? "#10b981" : "var(--primary-color)";
+            drinkingStatusEl.innerText = currentDrinkState ? "Đang uống" : "Chưa uống";
+            drinkingStatusEl.style.color = currentDrinkState ? "#10b981" : "var(--text-muted)";
+        }
+
+        if (drinkingIconEl) {
+            drinkingIconEl.style.color = currentDrinkState ? "#10b981" : "var(--primary-color)";
         }
 
         totalConsumed = data.total_consumed || 0;
         updateProgressUI();
 
-        // Ghi lịch sử uống nước cục bộ
         if (lastReportedConsumed !== null && totalConsumed > lastReportedConsumed + 5) {
             localHistory.unshift({
                 time: Date.now(),
@@ -502,6 +559,7 @@ onValue(bottleRef, (snapshot) => {
             }
 
             localStorage.setItem('water_history', JSON.stringify(localHistory));
+
             renderSelectors();
             updateHistoryUI();
             updateDailyChartFromHistory();
@@ -517,14 +575,24 @@ onValue(bottleRef, (snapshot) => {
             lastSyncEl.innerText = `Cập nhật: ${new Date().toLocaleTimeString()}`;
         }
 
-        if (firebaseDelayEl) {
-            firebaseDelayEl.innerText = `Độ trễ Firebase → Web: ${firebaseToWebDelay.toFixed(2)} ms`;
+        if (drinkStateChanged) {
+            drinkChangeCount++;
+
+            const statusText = currentDrinkState ? "Bắt đầu uống" : "Kết thúc uống";
+
+            if (firebaseDelayEl) {
+                firebaseDelayEl.innerText = `Lần ${drinkChangeCount} - ${statusText}: ${firebaseToWebDelay.toFixed(2)} ms`;
+            }
+
+            console.log("===== ĐO ĐỘ TRỄ FIREBASE → WEB =====");
+            console.log("Lần thay đổi:", drinkChangeCount);
+            console.log("Trạng thái:", statusText);
+            console.log("tWebStart =", tWebStart.toFixed(2), "ms");
+            console.log("tWebEnd =", tWebEnd.toFixed(2), "ms");
+            console.log("Tweb =", firebaseToWebDelay.toFixed(2), "ms");
         }
 
-        console.log("===== ĐO ĐỘ TRỄ FIREBASE → WEB =====");
-        console.log("tWebStart =", tWebStart.toFixed(2), "ms");
-        console.log("tWebEnd =", tWebEnd.toFixed(2), "ms");
-        console.log("Tweb =", firebaseToWebDelay.toFixed(2), "ms");
+        lastDrinkState = currentDrinkState;
     } else {
         simulateUpdate();
     }
@@ -537,33 +605,38 @@ function renderSelectors() {
 
 function renderDailySelector() {
     const listEl = document.getElementById('date-scroll-list');
+
     if (!listEl) return;
     
     const uniqueDates = new Set();
-    const dateMap = {}; 
+    const dateMap = {};
 
     localHistory.forEach(record => {
         const d = new Date(record.time);
         const dateStr = d.toLocaleDateString('vi-VN');
+
         if (!uniqueDates.has(dateStr)) {
             uniqueDates.add(dateStr);
-            d.setHours(0,0,0,0);
+            d.setHours(0, 0, 0, 0);
             dateMap[dateStr] = d.getTime();
         }
     });
 
     const today = new Date();
     const todayStr = today.toLocaleDateString('vi-VN');
-    today.setHours(0,0,0,0);
+
+    today.setHours(0, 0, 0, 0);
     dateMap[todayStr] = today.getTime();
 
     const sortedDateStrs = Object.keys(dateMap).sort((a, b) => dateMap[b] - dateMap[a]);
 
     listEl.innerHTML = '';
+
     sortedDateStrs.forEach(dateStr => {
         const btn = document.createElement('button');
+
         btn.className = 'date-btn';
-        
+
         if (selectedDailyDate === dateMap[dateStr]) {
             btn.classList.add('active');
         }
@@ -572,9 +645,10 @@ function renderDailySelector() {
         
         btn.addEventListener('click', () => {
             listEl.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
+
             btn.classList.add('active');
-            
             selectedDailyDate = dateMap[dateStr];
+
             updateHistoryUI();
             updateDailyChartFromHistory();
         });
@@ -585,23 +659,28 @@ function renderDailySelector() {
 
 function renderWeeklySelector() {
     const listEl = document.getElementById('week-scroll-list');
+
     if (!listEl) return;
     
     const uniqueWeeks = new Set();
-    const weekMap = {}; 
+    const weekMap = {};
 
     localHistory.forEach(record => {
         const d = new Date(record.time);
-        d.setHours(0,0,0,0);
+
+        d.setHours(0, 0, 0, 0);
+
         const day = d.getDay();
         const diffToMonday = day === 0 ? 6 : day - 1;
         const startOfWeek = new Date(d);
+
         startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
         
         const endOfWeek = new Date(startOfWeek);
+
         endOfWeek.setDate(startOfWeek.getDate() + 6);
         
-        const weekStr = `${startOfWeek.toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})} - ${endOfWeek.toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})}`;
+        const weekStr = `${startOfWeek.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })} - ${endOfWeek.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`;
         
         if (!uniqueWeeks.has(weekStr)) {
             uniqueWeeks.add(weekStr);
@@ -610,25 +689,34 @@ function renderWeeklySelector() {
     });
 
     const today = new Date();
-    today.setHours(0,0,0,0);
+
+    today.setHours(0, 0, 0, 0);
+
     const currDay = today.getDay();
     const diffCurrToMonday = currDay === 0 ? 6 : currDay - 1;
     const startOfThisWeek = new Date(today);
+
     startOfThisWeek.setDate(today.getDate() - diffCurrToMonday);
+
     const endOfThisWeek = new Date(startOfThisWeek);
+
     endOfThisWeek.setDate(startOfThisWeek.getDate() + 6);
-    const thisWeekStr = `${startOfThisWeek.toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})} - ${endOfThisWeek.toLocaleDateString('vi-VN', {day:'2-digit', month:'2-digit'})}`;
+
+    const thisWeekStr = `${startOfThisWeek.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })} - ${endOfThisWeek.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}`;
     
     weekMap[thisWeekStr] = startOfThisWeek.getTime();
 
     const sortedWeekStrs = Object.keys(weekMap).sort((a, b) => weekMap[b] - weekMap[a]);
 
     listEl.innerHTML = '';
+
     sortedWeekStrs.forEach(weekStr => {
         const btn = document.createElement('button');
+
         btn.className = 'date-btn';
         
         const currentSelectedStartOfWeek = new Date(selectedWeeklyDate);
+
         currentSelectedStartOfWeek.setDate(currentSelectedStartOfWeek.getDate() - (currentSelectedStartOfWeek.getDay() === 0 ? 6 : currentSelectedStartOfWeek.getDay() - 1));
         
         if (currentSelectedStartOfWeek.getTime() === weekMap[weekStr]) {
@@ -639,9 +727,10 @@ function renderWeeklySelector() {
         
         btn.addEventListener('click', () => {
             listEl.querySelectorAll('.date-btn').forEach(b => b.classList.remove('active'));
+
             btn.classList.add('active');
-            
             selectedWeeklyDate = weekMap[weekStr];
+
             updateWeeklyChartFromHistory();
         });
         
@@ -651,23 +740,29 @@ function renderWeeklySelector() {
 
 function updateHistoryUI() {
     const tbody = document.getElementById('history-body');
+
     if (!tbody) return;
+
     tbody.innerHTML = '';
     
     const filteredHistory = localHistory.filter(record => {
         const d = new Date(record.time);
-        d.setHours(0,0,0,0);
+
+        d.setHours(0, 0, 0, 0);
+
         return d.getTime() === selectedDailyDate;
     });
 
     filteredHistory.slice(0, 10).forEach(record => {
         const timeStr = new Date(record.time).toLocaleTimeString('vi-VN');
         const tr = document.createElement('tr');
+
         tr.innerHTML = `
             <td>${timeStr}</td>
             <td>${Math.round(record.amount)} ml</td>
             <td><span style="color: #4caf50;">${record.status}</span></td>
         `;
+
         tbody.appendChild(tr);
     });
 }
@@ -678,26 +773,29 @@ function updateDailyChartFromHistory() {
     const refDate = new Date(selectedDailyDate);
     const isToday = refDate.toLocaleDateString('vi-VN') === new Date().toLocaleDateString('vi-VN');
     const endHour = isToday ? new Date().getHours() : 23;
-    
     const labels = [];
     const dataVals = [];
     
     for (let i = 5; i >= 0; i--) {
-        let h = endHour - i*3; 
+        let h = endHour - i * 3;
+
         if (h < 0) h += 24;
+
         labels.push(`${h}h`);
-        dataVals.push(0); 
+        dataVals.push(0);
     }
     
     localHistory.forEach(record => {
         const recDate = new Date(record.time);
-        const recDateStart = new Date(recDate).setHours(0,0,0,0);
+        const recDateStart = new Date(recDate).setHours(0, 0, 0, 0);
         
         if (recDateStart === selectedDailyDate) {
             const h = recDate.getHours();
+
             for (let i = labels.length - 1; i >= 0; i--) {
                 const bucketH = parseInt(labels[i]);
-                if (Math.abs(h - bucketH) <= 1 || (bucketH===0 && h===23)) {
+
+                if (Math.abs(h - bucketH) <= 1 || (bucketH === 0 && h === 23)) {
                     dataVals[i] += record.amount / 1000;
                     break;
                 }
@@ -717,26 +815,31 @@ function updateWeeklyChartFromHistory() {
     const weeklyLabels = [];
     const weeklyDataVals = [];
     const dayNames = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
-    
     const d = new Date(selectedWeeklyDate);
     const day = d.getDay();
     const diffToMonday = day === 0 ? 6 : day - 1;
     const startOfWeek = new Date(selectedWeeklyDate);
+
     startOfWeek.setDate(startOfWeek.getDate() - diffToMonday);
 
-    const todayNum = new Date().setHours(0,0,0,0);
+    const todayNum = new Date().setHours(0, 0, 0, 0);
 
     for (let i = 0; i < 7; i++) {
         const dateInWeek = new Date(startOfWeek);
+
         dateInWeek.setDate(startOfWeek.getDate() + i);
+
         const isDayToday = dateInWeek.getTime() === todayNum;
+
         weeklyLabels.push(isDayToday ? "Hôm nay" : dayNames[i]);
         weeklyDataVals.push(0);
     }
 
     localHistory.forEach(record => {
         const recDay = new Date(record.time);
-        recDay.setHours(0,0,0,0);
+
+        recDay.setHours(0, 0, 0, 0);
+
         const daysFromMonday = Math.round((recDay - startOfWeek) / (1000 * 60 * 60 * 24));
         
         if (daysFromMonday >= 0 && daysFromMonday <= 6) {
@@ -753,8 +856,10 @@ function updateWeeklyChartFromHistory() {
 
 function simulateUpdate() {
     let demoLevel = 350;
+
     setInterval(() => {
         demoLevel = 300 + Math.random() * 100;
+
         updateBottleUI(demoLevel);
         updateTempUI(25 + Math.random() * 5);
     }, 3000);
@@ -766,11 +871,14 @@ updateProgressUI();
 updateBottleUI(0);
 renderSelectors();
 generateAdvisorInsights();
+
 if (localHistory.length > 0) {
     updateHistoryUI();
+
     setTimeout(() => {
         updateDailyChartFromHistory();
         updateWeeklyChartFromHistory();
     }, 100);
 }
+
 switchTab('overview');
