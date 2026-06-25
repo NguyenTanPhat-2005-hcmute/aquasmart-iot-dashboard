@@ -1,6 +1,6 @@
 // Import Firebase SDKs
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js";
-import { getDatabase, ref, onValue, set, get, child, remove } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
+import { getDatabase, ref, onValue, set, get, child, remove, push } from "https://www.gstatic.com/firebasejs/9.22.1/firebase-database.js";
 
 // --- Authentication Guard ---
 if (localStorage.getItem('isLoggedIn') !== 'true') {
@@ -80,6 +80,7 @@ window.addEventListener('DOMContentLoaded', () => {
     }
 
     initAdminPanel();
+    createLatencyCard();
 });
 
 // Firebase Configuration
@@ -215,9 +216,24 @@ let lastReportedConsumed = null;
 let selectedDailyDate = new Date().setHours(0, 0, 0, 0);
 let selectedWeeklyDate = new Date().setHours(0, 0, 0, 0);
 
-// Biến dùng để đo delay Firebase → Web chỉ khi trạng thái uống thay đổi
+// ============================================================
+// BIẾN ĐO ĐỘ TRỄ PHẢN HỒI TRÊN WEB
+// ============================================================
+
+// Trạng thái uống trước đó
 let lastDrinkState = null;
+
+// Số lần Web ghi nhận thay đổi trạng thái
 let drinkChangeCount = 0;
+
+// Kết quả độ trễ mới nhất từ ESP32
+let latestEspLatency = null;
+
+// Kết quả Web đang chờ dữ liệu độ trễ tương ứng từ ESP32
+let pendingWebLatency = null;
+
+// Tránh sử dụng lại cùng một sự kiện ESP32
+let lastUsedEspEventNumber = null;
 
 // --- DOM Elements ---
 const navItems = document.querySelectorAll('.nav-item, .mobile-nav-item');
@@ -520,84 +536,394 @@ function initCharts() {
     }
 }
 
-// --- Firebase ---
-// Đo delay Firebase → Web chỉ khi trạng thái uống thay đổi
-const bottleRef = ref(db, 'smart_bottle/current_status');
+// ============================================================
+// TẠO THẺ HIỂN THỊ ĐỘ TRỄ TRÊN DASHBOARD
+// ============================================================
+function createLatencyCard() {
+    if (document.getElementById('latency-card')) {
+        return;
+    }
 
-onValue(bottleRef, (snapshot) => {
-    const tWebStart = performance.now();
-    const data = snapshot.val();
+    const container =
+        document.querySelector('#overview .overview-stats') ||
+        document.getElementById('overview');
 
-    if (data) {
-        updateTempUI(data.water_temp || 0);
-        updateBottleUI(data.water_level || 0);
+    if (!container) {
+        console.warn('Không tìm thấy vị trí để tạo thẻ độ trễ.');
+        return;
+    }
 
-        const currentDrinkState = data.is_drinking ? true : false;
-        const drinkStateChanged = lastDrinkState !== null && currentDrinkState !== lastDrinkState;
+    const card = document.createElement('div');
 
-        if (drinkingStatusEl) {
-            drinkingStatusEl.innerText = currentDrinkState ? "Đang uống" : "Chưa uống";
-            drinkingStatusEl.style.color = currentDrinkState ? "#10b981" : "var(--text-muted)";
-        }
+    card.id = 'latency-card';
+    card.className = 'card status-card';
+    card.style.gridColumn = '1 / -1';
+    card.style.display = 'block';
 
-        if (drinkingIconEl) {
-            drinkingIconEl.style.color = currentDrinkState ? "#10b981" : "var(--primary-color)";
-        }
+    card.innerHTML = `
+        <div style="display:flex; align-items:center; gap:14px;">
+            <div class="card-icon status-icon">
+                <i class="fas fa-stopwatch"></i>
+            </div>
 
-        totalConsumed = data.total_consumed || 0;
-        updateProgressUI();
+            <div class="card-info" style="width:100%;">
+                <h3>Độ trễ phản hồi hệ thống</h3>
 
-        if (lastReportedConsumed !== null && totalConsumed > lastReportedConsumed + 5) {
-            localHistory.unshift({
-                time: Date.now(),
-                amount: totalConsumed - lastReportedConsumed,
-                status: 'Hoàn thành'
-            });
+                <p style="margin:6px 0;">
+                    Sự kiện:
+                    <strong id="latency-action">Chưa có dữ liệu</strong>
+                </p>
 
-            if (localHistory.length > 50) {
-                localHistory.pop();
-            }
+                <p style="margin:6px 0;">
+                    ESP32 → Firebase:
+                    <strong id="latency-esp">-- ms</strong>
+                </p>
 
-            localStorage.setItem('water_history', JSON.stringify(localHistory));
+                <p style="margin:6px 0;">
+                    Cập nhật giao diện Web:
+                    <strong id="latency-web">-- ms</strong>
+                </p>
 
-            renderSelectors();
-            updateHistoryUI();
-            updateDailyChartFromHistory();
-            updateWeeklyChartFromHistory();
-        }
+                <p style="margin:6px 0;">
+                    Tổng gần đúng:
+                    <strong id="latency-total">-- ms</strong>
+                </p>
+            </div>
+        </div>
+    `;
 
-        lastReportedConsumed = totalConsumed;
+    container.appendChild(card);
+}
 
-        const tWebEnd = performance.now();
-        const firebaseToWebDelay = tWebEnd - tWebStart;
+// ============================================================
+// CHỜ TRÌNH DUYỆT VẼ XONG GIAO DIỆN
+// Hai requestAnimationFrame giúp t6 được lấy sau khi DOM đã render.
+// ============================================================
+function runAfterInterfacePaint(callback) {
+    requestAnimationFrame(() => {
+        requestAnimationFrame(callback);
+    });
+}
 
-        if (lastSyncEl) {
-            lastSyncEl.innerText = `Cập nhật: ${new Date().toLocaleTimeString()}`;
-        }
+// ============================================================
+// CHUẨN HÓA TÊN HÀNH ĐỘNG
+// Ví dụ: "Bat dau uong" và "Bắt đầu uống" được xem là giống nhau.
+// ============================================================
+function normalizeAction(action) {
+    return String(action || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
 
-        if (drinkStateChanged) {
-            drinkChangeCount++;
+// ============================================================
+// HIỂN THỊ KẾT QUẢ ĐỘ TRỄ
+// ============================================================
+function displayLatencyResult(result) {
+    const actionEl = document.getElementById('latency-action');
+    const espEl = document.getElementById('latency-esp');
+    const webEl = document.getElementById('latency-web');
+    const totalEl = document.getElementById('latency-total');
 
-            const statusText = currentDrinkState ? "Bắt đầu uống" : "Kết thúc uống";
+    if (actionEl) {
+        actionEl.innerText = result.action;
+    }
 
-            if (firebaseDelayEl) {
-                firebaseDelayEl.innerText = `Lần ${drinkChangeCount} - ${statusText}: ${firebaseToWebDelay.toFixed(2)} ms`;
-            }
+    if (espEl) {
+        espEl.innerText = `${result.TresponseEsp.toFixed(2)} ms`;
+    }
 
-            console.log("===== ĐO ĐỘ TRỄ FIREBASE → WEB =====");
-            console.log("Lần thay đổi:", drinkChangeCount);
-            console.log("Trạng thái:", statusText);
-            console.log("tWebStart =", tWebStart.toFixed(2), "ms");
-            console.log("tWebEnd =", tWebEnd.toFixed(2), "ms");
-            console.log("Tweb =", firebaseToWebDelay.toFixed(2), "ms");
-        }
+    if (webEl) {
+        webEl.innerText = `${result.Tweb.toFixed(2)} ms`;
+    }
 
-        lastDrinkState = currentDrinkState;
-    } else {
-        simulateUpdate();
+    if (totalEl) {
+        totalEl.innerText = `${result.TtotalApprox.toFixed(2)} ms`;
+    }
+}
+
+// ============================================================
+// GHÉP KẾT QUẢ ESP32 VỚI KẾT QUẢ WEB
+// ============================================================
+async function finalizeWebLatency(webMeasurement) {
+    if (!latestEspLatency) {
+        pendingWebLatency = webMeasurement;
+        return;
+    }
+
+    const espAction = normalizeAction(latestEspLatency.action);
+    const webAction = normalizeAction(webMeasurement.action);
+
+    // Chỉ ghép khi đúng cùng loại hành động
+    if (espAction !== webAction) {
+        pendingWebLatency = webMeasurement;
+        return;
+    }
+
+    const eventNumber = Number(
+        latestEspLatency.event_number ?? -1
+    );
+
+    // Không sử dụng lại cùng một sự kiện ESP32
+    if (
+        eventNumber >= 0 &&
+        eventNumber === lastUsedEspEventNumber
+    ) {
+        pendingWebLatency = webMeasurement;
+        return;
+    }
+
+    const TresponseEsp = Number(
+        latestEspLatency.Tresponse ??
+        latestEspLatency.Tdelay_esp ??
+        0
+    );
+
+    if (
+        !Number.isFinite(TresponseEsp) ||
+        TresponseEsp <= 0
+    ) {
+        pendingWebLatency = webMeasurement;
+        return;
+    }
+
+    const TtotalApprox =
+        TresponseEsp + webMeasurement.Tweb;
+
+    const result = {
+        event_number: eventNumber,
+        action: webMeasurement.action,
+
+        // Độ trễ đo trong ESP32
+        Tresponse_esp: Number(TresponseEsp.toFixed(3)),
+
+        // Độ trễ cập nhật giao diện Web
+        Tweb: Number(webMeasurement.Tweb.toFixed(3)),
+
+        // Tổng gần đúng
+        Ttotal_approx: Number(TtotalApprox.toFixed(3)),
+
+        t5: Number(webMeasurement.t5.toFixed(3)),
+        t6: Number(webMeasurement.t6.toFixed(3)),
+
+        browser_measured_at: Date.now()
+    };
+
+    lastUsedEspEventNumber = eventNumber;
+    pendingWebLatency = null;
+
+    displayLatencyResult({
+        action: result.action,
+        TresponseEsp: result.Tresponse_esp,
+        Tweb: result.Tweb,
+        TtotalApprox: result.Ttotal_approx
+    });
+
+    console.log('');
+    console.log('===== ĐO ĐỘ TRỄ PHẢN HỒI WEB =====');
+    console.log('Sự kiện:', result.action);
+    console.log('Số sự kiện ESP32:', result.event_number);
+    console.log('t5 =', result.t5.toFixed(3), 'ms');
+    console.log('t6 =', result.t6.toFixed(3), 'ms');
+    console.log('Tweb =', result.Tweb.toFixed(3), 'ms');
+    console.log(
+        'Tresponse ESP32 =',
+        result.Tresponse_esp.toFixed(3),
+        'ms'
+    );
+    console.log(
+        'Ttotal gần đúng =',
+        result.Ttotal_approx.toFixed(3),
+        'ms'
+    );
+    console.log('====================================');
+    console.log('');
+
+    // Lưu kết quả mới nhất và lịch sử lên Firebase
+    try {
+        await set(
+            ref(db, 'smart_bottle/web_latency/latest'),
+            result
+        );
+
+        await push(
+            ref(db, 'smart_bottle/web_latency/history'),
+            result
+        );
+    } catch (error) {
+        console.error(
+            'Không thể lưu độ trễ Web lên Firebase:',
+            error
+        );
+    }
+}
+
+// ============================================================
+// FIREBASE: ĐỌC ĐỘ TRỄ ESP32
+// ============================================================
+const espLatencyRef = ref(
+    db,
+    'smart_bottle/drinking_latency/latest'
+);
+
+onValue(espLatencyRef, (snapshot) => {
+    if (!snapshot.exists()) {
+        return;
+    }
+
+    latestEspLatency = snapshot.val();
+
+    // Nếu Web đã đo xong nhưng đang chờ kết quả ESP32
+    if (pendingWebLatency) {
+        finalizeWebLatency(pendingWebLatency);
     }
 });
 
+// ============================================================
+// FIREBASE: ĐỌC TRẠNG THÁI BÌNH VÀ ĐO t5 → t6
+// ============================================================
+const bottleRef = ref(
+    db,
+    'smart_bottle/current_status'
+);
+
+onValue(bottleRef, (snapshot) => {
+    /*
+     * t5: thời điểm callback Web bắt đầu chạy,
+     * tức là Web vừa nhận được dữ liệu mới từ Firebase.
+     */
+    const t5 = performance.now();
+
+    const data = snapshot.val();
+
+    if (!data) {
+        simulateUpdate();
+        return;
+    }
+
+    // Cập nhật nhiệt độ và mực nước
+    updateTempUI(Number(data.water_temp) || 0);
+    updateBottleUI(Number(data.water_level) || 0);
+
+    // Kiểm tra trạng thái uống
+    const currentDrinkState =
+        Boolean(data.is_drinking);
+
+    const drinkStateChanged =
+        lastDrinkState !== null &&
+        currentDrinkState !== lastDrinkState;
+
+    if (drinkingStatusEl) {
+        drinkingStatusEl.innerText =
+            currentDrinkState
+                ? 'Đang uống'
+                : 'Chưa uống';
+
+        drinkingStatusEl.style.color =
+            currentDrinkState
+                ? '#10b981'
+                : 'var(--text-muted)';
+    }
+
+    if (drinkingIconEl) {
+        drinkingIconEl.style.color =
+            currentDrinkState
+                ? '#10b981'
+                : 'var(--primary-color)';
+    }
+
+    // Cập nhật tổng lượng nước
+    totalConsumed =
+        Number(data.total_consumed) || 0;
+
+    updateProgressUI();
+
+    // Lưu lịch sử uống nước
+    if (
+        lastReportedConsumed !== null &&
+        totalConsumed > lastReportedConsumed + 5
+    ) {
+        localHistory.unshift({
+            time: Date.now(),
+            amount:
+                totalConsumed - lastReportedConsumed,
+            status: 'Hoàn thành'
+        });
+
+        if (localHistory.length > 50) {
+            localHistory.pop();
+        }
+
+        localStorage.setItem(
+            'water_history',
+            JSON.stringify(localHistory)
+        );
+
+        renderSelectors();
+        updateHistoryUI();
+        updateDailyChartFromHistory();
+        updateWeeklyChartFromHistory();
+    }
+
+    lastReportedConsumed = totalConsumed;
+
+    if (lastSyncEl) {
+        lastSyncEl.innerText =
+            `Cập nhật: ${new Date().toLocaleTimeString('vi-VN')}`;
+    }
+
+    /*
+     * Lưu trạng thái hiện tại trước khi chạy requestAnimationFrame.
+     */
+    lastDrinkState = currentDrinkState;
+
+    // Không đo lần tải dữ liệu đầu tiên.
+    // Chỉ đo khi trạng thái bắt đầu/kết thúc uống thay đổi.
+    if (!drinkStateChanged) {
+        return;
+    }
+
+    const action = currentDrinkState
+        ? 'Bắt đầu uống'
+        : 'Kết thúc uống';
+
+    /*
+     * Chờ trình duyệt cập nhật và vẽ xong giao diện.
+     */
+    runAfterInterfacePaint(() => {
+        /*
+         * t6: thời điểm giao diện đã được cập nhật.
+         */
+        const t6 = performance.now();
+
+        const Tweb = t6 - t5;
+
+        drinkChangeCount++;
+
+        const webMeasurement = {
+            changeNumber: drinkChangeCount,
+            action: action,
+            t5: t5,
+            t6: t6,
+            Tweb: Tweb,
+            measuredAt: Date.now()
+        };
+
+        console.log('');
+        console.log('----- WEB ĐÃ CẬP NHẬT GIAO DIỆN -----');
+        console.log('Lần đo:', drinkChangeCount);
+        console.log('Hành động:', action);
+        console.log('t5 =', t5.toFixed(3), 'ms');
+        console.log('t6 =', t6.toFixed(3), 'ms');
+        console.log('Tweb =', Tweb.toFixed(3), 'ms');
+        console.log('--------------------------------------');
+        console.log('');
+
+        finalizeWebLatency(webMeasurement);
+    });
+});
 function renderSelectors() {
     renderDailySelector();
     renderWeeklySelector();
